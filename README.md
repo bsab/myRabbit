@@ -72,8 +72,8 @@ Thanks!
 
 ## Author
 
-Sabatino Severino <sab.severino01@gmail.com> http://github.com/bsab
+[Sabatino Severino](https://about.me/the_sab), @bsab
 
 ## License
 
- - **MIT** : http://opensource.org/licenses/MIT
+MyRabbit is available under the MIT license. See the LICENSE file for more info.
