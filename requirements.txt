@@ -1,4 +1,4 @@
 pypiwin32
 wheel
-MySQL-python
+pymysql
 pika

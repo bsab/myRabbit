@@ -1,15 +1,13 @@
 import logging
 import pika
 import json
-import MySQLdb
-
-try:
-    from winservice import WinService
-except:
-    pass #other so
+import pymysql.cursors
+import pymysql
 
 LOG_FORMAT = ('%(levelname) -10s %(asctime)s %(name) -30s %(funcName) '
               '-35s %(lineno) -5d: %(message)s')
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,7 +28,7 @@ class MyRabbitPublisher(object):
     EXCHANGE_TYPE = 'topic'
     PUBLISH_INTERVAL = 60
     QUEUE = 'text'
-    ROUTING_KEY = 'myrabbit.text'
+    ROUTING_KEY = 'myrabbit_py.text'
 
     def __init__(self, amqp_url, mysql_url, mysql_username, mysql_psw, mysql_dbname, mysql_table_list):
         """Setup the example publisher object, passing in the URL we will use
@@ -45,7 +43,7 @@ class MyRabbitPublisher(object):
         :param str mysql_dbname: The database name for connecting to MySQL
         """
 
-        self._connection = None
+        self._rabbitmq_connection = None
         self._channel = None
         self._deliveries = []
         self._acked = 0
@@ -63,7 +61,7 @@ class MyRabbitPublisher(object):
         self._mysql_dbname = mysql_dbname;
         self._mysql_table_list = mysql_table_list;
 
-    def connect(self):
+    def rabbitmq_connect(self):
         """This method connects to RabbitMQ, returning the connection handle.
         When the connection is established, the on_connection_open method
         will be invoked by pika. If you want the reconnection to work, make
@@ -81,11 +79,19 @@ class MyRabbitPublisher(object):
     def mysql_connect(self):
         """This method connects to MySQL, returning the connection handle.
 
-        :rtype: MySQLdb.Connection
+        :rtype: pymysql.Connection
 
         """
         logger.info('Connecting to MySQL %s', self._mysql_url)
-        return MySQLdb.connect(self._mysql_url, self._mysql_username, self._mysql_psw, self._mysql_dbname);
+
+        # Connect to the database
+        return pymysql.connect(host=self._mysql_url,
+                               user=self._mysql_username,
+                               password=self._mysql_psw,
+                               db=self._mysql_dbname,
+                               charset='utf8mb4',
+                               cursorclass=pymysql.cursors.DictCursor)
+
 
     def on_connection_open(self, unused_connection):
         """This method is called by pika once the connection to RabbitMQ has
@@ -105,7 +111,7 @@ class MyRabbitPublisher(object):
 
         """
         logger.info('Adding connection close callback')
-        self._connection.add_on_close_callback(self.on_connection_closed)
+        self._rabbitmq_connection.add_on_close_callback(self.on_connection_closed)
 
     def on_connection_closed(self, connection, reply_code, reply_text):
         """This method is invoked by pika when the connection to RabbitMQ is
@@ -119,11 +125,11 @@ class MyRabbitPublisher(object):
         """
         self._channel = None
         if self._closing:
-            self._connection.ioloop.stop()
+            self._rabbitmq_connection.ioloop.stop()
         else:
             logger.warning('Connection closed, reopening in 5 seconds: (%s) %s',
                            reply_code, reply_text)
-            self._connection.add_timeout(5, self.reconnect)
+            self._rabbitmq_connection.add_timeout(5, self.reconnect)
 
     def reconnect(self):
         """Will be invoked by the IOLoop timer if the connection is
@@ -136,13 +142,13 @@ class MyRabbitPublisher(object):
         self._message_number = 0
 
         # This is the old connection IOLoop instance, stop its ioloop
-        self._connection.ioloop.stop()
+        self._rabbitmq_connection.ioloop.stop()
 
         # Create a new connection
-        self._connection = self.connect()
+        self._rabbitmq_connection = self.rabbitmq_connect()
 
         # There is now a new connection, needs a new ioloop to run
-        self._connection.ioloop.start()
+        self._rabbitmq_connection.ioloop.start()
 
     def open_channel(self):
         """This method will open a new channel with RabbitMQ by issuing the
@@ -152,7 +158,7 @@ class MyRabbitPublisher(object):
 
         """
         logger.info('Creating a new channel')
-        self._connection.channel(on_open_callback=self.on_channel_open)
+        self._rabbitmq_connection.channel(on_open_callback=self.on_channel_open)
 
     def on_channel_open(self, channel):
         """This method is invoked by pika when the channel has been opened.
@@ -190,7 +196,7 @@ class MyRabbitPublisher(object):
         """
         logger.warning('Channel was closed: (%s) %s', reply_code, reply_text)
         if not self._closing:
-            self._connection.close()
+            self._rabbitmq_connection.close()
 
     def setup_exchange(self, exchange_name):
         """Setup the exchange on RabbitMQ by invoking the Exchange.Declare RPC
@@ -307,8 +313,8 @@ class MyRabbitPublisher(object):
             return
         logger.info('Scheduling next message for %0.1f seconds',
                     self.PUBLISH_INTERVAL)
-        self._connection.add_timeout(self.PUBLISH_INTERVAL,
-                                     self.publish_message)
+        self._rabbitmq_connection.add_timeout(self.PUBLISH_INTERVAL,
+                                              self.publish_message)
 
     def get_message_from_selected_data(self):
         """Select the data from the Remocean Database"""
@@ -327,20 +333,18 @@ class MyRabbitPublisher(object):
 
             # select the last row from table
             for table_name in self._mysql_table_list:
+                #print table_name
                 cursor.execute("SELECT * FROM " + table_name)
                 packet[table_name] = [];
-                # effettuo il fetch dei record
                 for row in cursor.fetchall():
-                    # print row
+                    #print row
                     packet[table_name].append(row)
 
             cursor.close();
         except Exception as e:
             self.close_connection()
-            print "******************** EXCEPT " + str(e) + " ************************"
             return packet;
 
-        print "******************** END ************************"
         return packet;
 
     def publish_message(self):
@@ -366,11 +370,11 @@ class MyRabbitPublisher(object):
         #    return
 
         message = self.get_message_from_selected_data();
-        print "***************************************"
-        print json.dumps(message, ensure_ascii=False)
-        print "***************************************"
+        #print "***************************************"
+        #print json.dumps(message, ensure_ascii=False)
+        #print "***************************************"
 
-        properties = pika.BasicProperties(app_id='myrabbit-publisher',
+        properties = pika.BasicProperties(app_id='myrabbit_py-publisher',
                                           content_type='application/json')
 
         self._channel.basic_publish(self.EXCHANGE,
@@ -393,13 +397,13 @@ class MyRabbitPublisher(object):
             self._channel.close()
 
     def run(self):
-        """Run the example code by connecting and then starting the IOLoop.
+        """Run the code by connecting and then starting the IOLoop.
 
         """
-        self._connection = self.connect()
+        self._rabbitmq_connection = self.rabbitmq_connect()
         self._mysql_connection = self.mysql_connect()
 
-        self._connection.ioloop.start()
+        self._rabbitmq_connection.ioloop.start()
 
     def stop(self):
         """Stop the example by closing the channel and connection. We
@@ -414,56 +418,12 @@ class MyRabbitPublisher(object):
         self._stopping = True
         self.close_channel()
         self.close_connection()
-        self._connection.ioloop.start()
+        self._rabbitmq_connection.ioloop.start()
         logger.info('Stopped')
 
     def close_connection(self):
         """This method closes the connection to RabbitMQ."""
         logger.info('Closing connection')
         self._closing = True
-        self._connection.close()
+        self._rabbitmq_connection.close()
         self._mysql_connection.close()
-
-
-from ConfigParser import SafeConfigParser
-
-
-def main():
-    print
-    print "*****************************************************"
-    print "********** MYSQL RABBITMQ PUCLISHER          ********"
-    print "*****************************************************"
-    print
-
-    # logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
-    # logging.basicConfig(level=logging.WARNING, format=LOG_FORMAT)
-    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
-
-    # reading configuration file
-    parser = SafeConfigParser()
-    parser.read('config.ini')
-
-    # rabbit connection parameters
-    rabbit_url = str(parser.get('rabbitmq', 'rabbit_url'))
-
-    # mysql connection parameters
-    mysql_url = str(parser.get('mysql', 'mysql_url'))
-    mysql_username = str(parser.get('mysql', 'mysql_username'))
-    mysql_psw = str(parser.get('mysql', 'mysql_psw'))
-    mysql_dbname = str(parser.get('mysql', 'mysql_dbname'))
-    mysql_table_list = json.loads(parser.get('mysql', 'mysql_table_list'))
-
-    waveradar = MyRabbitPublisher(rabbit_url,
-                                  mysql_url,
-                                  mysql_username,
-                                  mysql_psw,
-                                  mysql_dbname,
-                                  mysql_table_list)
-    try:
-        waveradar.run()
-    except KeyboardInterrupt:
-        waveradar.stop()
-
-
-if __name__ == '__main__':
-    main()
