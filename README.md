@@ -1,7 +1,9 @@
 # MyRabbit
 
-MyRabbit is an asynchronous publisher app based on pika that dumps selected tables from a MySQL database and publish the output on a RabbitMQ.
 
+![Preview](myrabbit.png)
+
+MyRabbit is an asynchronous publisher app based on pika that dumps selected tables from a MySQL database and publish the output on a RabbitMQ.
 
 ## Install
 
